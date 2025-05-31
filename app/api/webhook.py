@@ -3,7 +3,8 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
-    LocationMessage, LocationSendMessage, PostbackEvent
+    LocationMessage, LocationSendMessage, PostbackEvent,
+    ImagemapSendMessage, BaseSize, URIImagemapAction, ImagemapArea
 )
 import os
 import sys
@@ -295,7 +296,26 @@ def handle_message(event):
             response = "請輸入開始日期（格式：YYYY/MM/DD）"
             user_states[user_id]['history_state'] = 'waiting_for_start_date'
         elif text == "官網菜單連結":
-            response = "以下是各店家的官方菜單連結：\n- 五十嵐：https://www.50lan.com.tw/menu\n- 清心福全：https://www.chingshin.tw/product.php\n- 可不可：https://www.kebuke.com/menu/"
+            response = ImagemapSendMessage(
+                base_url='https://res.cloudinary.com/df8pqukj6/image/upload/v1748697999/link_zjrzoj.jpg#',  # 圖片網址，不要加副檔名
+                alt_text='點選前往官網',
+                base_size=BaseSize(height=520, width=1040),
+                actions=[
+                    URIImagemapAction(
+                        link_uri='http://50lan.com/web/products.asp',  # 五十嵐官網
+                        area=ImagemapArea(x=0, y=0, width=346, height=520)
+                    ),
+                    URIImagemapAction(
+                        link_uri='https://www.chingshin.tw/product.php',  # 清心福全官網
+                        area=ImagemapArea(x=346, y=0, width=346, height=520)
+                    ),
+                    URIImagemapAction(
+                        link_uri='https://www.macutea.com.tw',  # 麻古茶坊官網
+                        area=ImagemapArea(x=692, y=0, width=348, height=520)
+                    )
+                ]
+            )
+
         elif "比較" in text:
             response = handle_drink_comparison(text)
         elif text.startswith("想要") or text.startswith("我想"):
@@ -306,10 +326,17 @@ def handle_message(event):
             # 假設是店家選擇
             response = handle_store_selection(user_id, text)
         
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=response)
-        )
+        # 回傳訊息
+        if isinstance(response, ImagemapSendMessage):
+            line_bot_api.reply_message(
+                event.reply_token,
+                response  # 不包在 TextSendMessage 裡
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=response)
+            )
 
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
