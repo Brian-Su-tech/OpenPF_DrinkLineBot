@@ -297,7 +297,7 @@ def handle_message(event):
             user_states[user_id]['history_state'] = 'waiting_for_start_date'
         elif text == "官網菜單連結":
             response = ImagemapSendMessage(
-                base_url='https://res.cloudinary.com/df8pqukj6/image/upload/v1748697999/link_zjrzoj.jpg#',  # 圖片網址，不要加副檔名
+                base_url='https://res.cloudinary.com/df8pqukj6/image/upload/v1748697999/link_zjrzoj.jpg#',  # 圖片網址
                 alt_text='點選前往官網',
                 base_size=BaseSize(height=520, width=1040),
                 actions=[
