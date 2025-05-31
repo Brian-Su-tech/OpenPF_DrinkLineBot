@@ -3,17 +3,19 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
-    TemplateSendMessage, ButtonsTemplate, PostbackAction
+    LocationMessage, LocationSendMessage, PostbackEvent
 )
 import os
 import sys
 from dotenv import load_dotenv
+from collections import defaultdict
 
 # 添加專案根目錄到 Python 路徑
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from app.services.drink_service import DrinkService
 from app.services.gemini_service import GeminiService
+from app.services.store_service import StoreService
 
 # 載入環境變數
 load_dotenv()
@@ -27,6 +29,10 @@ handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 # 初始化服務
 drink_service = DrinkService()
 gemini_service = GeminiService()
+store_service = StoreService()
+
+# 使用者狀態管理
+user_states = defaultdict(dict)
 
 def handle_drink_comparison(text):
     """
@@ -71,6 +77,169 @@ def handle_drink_search(text):
     except ValueError:
         return "請使用正確的格式：[店家]的[飲料名稱]\n例如：五十嵐的珍珠奶茶"
 
+def handle_store_selection(user_id: str, brand: str):
+    """
+    處理店家選擇的邏輯
+    """
+    # 更新使用者狀態
+    user_states[user_id]['brand'] = brand
+    user_states[user_id]['state'] = 'waiting_for_location'
+    
+    return "📍請傳送您的位置資訊～\n我會幫您搜尋附近的飲料店！"
+
+def handle_location(user_id: str, latitude: float, longitude: float):
+    """
+    處理位置資訊的邏輯
+    """
+    try:
+        # 取得使用者選擇的店家
+        brand = user_states[user_id].get('brand')
+        if not brand:
+            return "請先幫我選擇飲料店～🧋（五十嵐、清心福全、麻古茶坊）"
+        
+        # 搜尋附近的店家
+        stores = store_service.search_nearby_stores(brand, (latitude, longitude))
+        if not stores:
+            return "找不到附近的店家噢～請重新選擇位置。"
+        
+        # 更新使用者狀態
+        user_states[user_id]['stores'] = stores
+        user_states[user_id]['state'] = 'waiting_for_store_selection'
+        
+        # 生成店家列表訊息
+        message = "以下是我找到的店家👉🏻\n請選擇一間😊\n\n"
+        for i, store in enumerate(stores, 1):
+            message += f"{i}. {store['name']}\n"
+            message += f"   評分：{store['rating']}\n"
+            message += f"   距離：{store['distance']} 公尺\n\n"
+        message += "請輸入店家的編號（1-3）"
+        
+        return message
+    except Exception as e:
+        return f"處理位置資訊時發生錯誤：{str(e)}"
+
+def handle_store_number(user_id: str, store_number: str):
+    """
+    處理使用者選擇的店家編號
+    """
+    try:
+        # 取得店家列表
+        stores = user_states[user_id].get('stores', [])
+        if not stores:
+            return "請先選擇位置"
+        
+        # 檢查編號是否有效
+        try:
+            index = int(store_number) - 1
+            if not 0 <= index < len(stores):
+                raise ValueError
+        except ValueError:
+            return "請輸入有效的店家編號（1-3）"
+        
+        # 更新使用者狀態
+        selected_store = stores[index]
+        user_states[user_id]['selected_store'] = selected_store
+        user_states[user_id]['state'] = 'waiting_for_drink'
+        
+        return f"收到🫡\n您選擇了：{selected_store['name']}\n最後請輸入您要點的飲料名稱"
+    except Exception as e:
+        return f"處理店家選擇時發生錯誤：{str(e)}"
+
+def handle_drink_selection(user_id: str, drink_name: str):
+    """
+    處理飲料選擇的邏輯
+    """
+    try:
+        # 取得使用者選擇的店家
+        brand = user_states[user_id].get('brand')
+        selected_store = user_states[user_id].get('selected_store')
+        if not brand or not selected_store:
+            return "請重新開始點餐流程"
+        
+        # 先檢查飲料是否存在
+        calories = store_service.get_drink_calories(brand, drink_name)
+        if calories is None:
+            # 取得該品牌的所有飲料
+            with open('data/drink_data.csv', 'r', encoding='utf-8') as f:
+                import csv
+                reader = csv.DictReader(f)
+                brand_drinks = [row['drink_name'] for row in reader if row['brand'] == brand]
+            
+            return f"找不到飲料：{drink_name}\n\n{brand}的飲料有：\n" + "\n".join(brand_drinks)
+        
+        # 儲存訂單
+        success = store_service.save_order(
+            user_id=user_id,
+            brand=brand,
+            location=selected_store['name'],
+            drink_name=drink_name
+        )
+        
+        if success:
+            # 清除使用者狀態
+            user_states[user_id].clear()
+            return "訂單已成功儲存🎉"
+        else:
+            return "儲存訂單時發生錯誤，請稍後再試。"
+    except Exception as e:
+        return f"處理飲料選擇時發生錯誤：{str(e)}"
+
+def handle_history_query(user_id: str, text: str):
+    """
+    處理歷史紀錄查詢的邏輯
+    """
+    try:
+        state = user_states[user_id].get('history_state')
+        
+        if state == 'waiting_for_start_date':
+            # 檢查日期格式是否正確
+            try:
+                from datetime import datetime
+                start_date = datetime.strptime(text, '%Y/%m/%d').strftime('%Y-%m-%d')
+                user_states[user_id]['start_date'] = start_date
+                user_states[user_id]['history_state'] = 'waiting_for_end_date'
+                return "請輸入結束日期（格式：YYYY/MM/DD）"
+            except ValueError:
+                return "日期格式錯誤，請使用 YYYY/MM/DD 格式（例如：2024/04/30）"
+        
+        elif state == 'waiting_for_end_date':
+            try:
+                from datetime import datetime
+                end_date = datetime.strptime(text, '%Y/%m/%d').strftime('%Y-%m-%d')
+                start_date = user_states[user_id].get('start_date')
+                
+                # 查詢歷史紀錄
+                orders = store_service.get_order_history(user_id, start_date, end_date)
+                
+                if not orders:
+                    user_states[user_id].clear()
+                    return f"在 {start_date} 到 {end_date} 期間沒有找到您的訂單紀錄"
+                
+                # 生成訂單列表訊息
+                message = f"📅 {start_date} 到 {end_date} 的訂單紀錄：\n\n"
+                
+                for i, order in enumerate(orders, 1):
+                    message += f"{i}. {order['brand']} - {order['drink_name']}\n"
+                    message += f"   地點：{order['location']}\n"
+                    message += f"   熱量：{order['calories']} 卡路里\n"
+                    message += f"   時間：{order['created_at']}\n\n"
+                
+                # 清除使用者狀態
+                user_states[user_id].clear()
+                
+                return message
+            except ValueError:
+                return "日期格式錯誤，請使用 YYYY/MM/DD 格式（例如：2024/04/30）"
+        
+        else:
+            # 初始化查詢狀態
+            user_states[user_id]['history_state'] = 'waiting_for_start_date'
+            return "請輸入開始日期（格式：YYYY/MM/DD）"
+    
+    except Exception as e:
+        user_states[user_id].clear()
+        return f"查詢歷史紀錄時發生錯誤：{str(e)}"
+
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -85,34 +254,113 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text
+    user_id = event.source.user_id
     
-    # 處理選單按鈕
-    if text == "查詢飲料熱量":
-        response = "🔎請輸入飲料資訊。\n格式：[店家]的[飲料名稱]\n例如：五十嵐的珍珠奶茶"
-    elif text == "飲料熱量比較":
-        response = "🔥請輸入兩店家的飲料資訊\n格式：比較店家A的飲料A和店家B的飲料B\n例如：比較五十嵐的珍珠奶茶和清心福全的紅茶拿鐵"
-    elif text == "AI 飲料推薦":
-        response = "💬請告訴我你想要什麼樣的飲料，例如：\n- 想要低熱量的飲料\n- 想要茶類的飲料\n- 想要有珍珠的飲料"
-    elif text == "點餐資料儲存":
-        response = "請輸入你要儲存的飲料資訊，格式：\n[店家]的[飲料名稱]"
-    elif text == "歷史紀錄查詢":
-        response = "請選擇要查詢的時間範圍：\n- 今天\n- 本週\n- 本月"
-    elif text == "官網菜單連結":
-        response = "以下是各店家的官方菜單連結：\n- 五十嵐：https://www.50lan.com.tw/menu\n- 清心福全：https://www.chingshin.tw/product.php\n- 可不可：https://www.kebuke.com/menu/"
-    # 處理熱量比較功能
-    elif "比較" in text:
-        response = handle_drink_comparison(text)
-    # 處理 AI 推薦功能
-    elif text.startswith("想要") or text.startswith("我想"):
-        response = gemini_service.get_drink_recommendations(text)
-    # 處理熱量查詢功能
+    # 檢查使用者狀態
+    state = user_states[user_id].get('state')
+    history_state = user_states[user_id].get('history_state')
+    
+    if history_state:
+        # 處理歷史紀錄查詢
+        response = handle_history_query(user_id, text)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=response)
+        )
+    elif state == 'waiting_for_store_selection':
+        # 處理店家編號選擇
+        response = handle_store_number(user_id, text)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=response)
+        )
+    elif state == 'waiting_for_drink':
+        # 處理飲料選擇
+        response = handle_drink_selection(user_id, text)
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=response)
+        )
     else:
-        response = handle_drink_search(text)
+        # 處理一般訊息
+        if text == "查詢飲料熱量":
+            response = "🔎請輸入飲料資訊。\n格式：[店家]的[飲料名稱]\n例如：五十嵐的珍珠奶茶"
+        elif text == "飲料熱量比較":
+            response = "🔥請輸入兩店家的飲料資訊\n格式：比較店家A的飲料A和店家B的飲料B\n例如：比較五十嵐的珍珠奶茶和清心福全的紅茶拿鐵"
+        elif text == "AI 飲料推薦":
+            response = "💬請告訴我你想要什麼樣的飲料，例如：\n- 想要低熱量的飲料\n- 想要茶類的飲料\n- 想要有珍珠的飲料"
+        elif text == "點餐資料儲存":
+            response = "請先幫我選擇飲料店～🧋"
+        elif text == "歷史紀錄查詢":
+            response = "請輸入開始日期（格式：YYYY/MM/DD）"
+            user_states[user_id]['history_state'] = 'waiting_for_start_date'
+        elif text == "官網菜單連結":
+            response = "以下是各店家的官方菜單連結：\n- 五十嵐：https://www.50lan.com.tw/menu\n- 清心福全：https://www.chingshin.tw/product.php\n- 可不可：https://www.kebuke.com/menu/"
+        elif "比較" in text:
+            response = handle_drink_comparison(text)
+        elif text.startswith("想要") or text.startswith("我想"):
+            response = gemini_service.get_drink_recommendations(text)
+        elif "的" in text and not text.startswith("比較"):  # 檢查是否為飲料查詢格式
+            response = handle_drink_search(text)
+        else:
+            # 假設是店家選擇
+            response = handle_store_selection(user_id, text)
+        
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=response)
+        )
 
+@handler.add(MessageEvent, message=LocationMessage)
+def handle_location(event):
+    user_id = event.source.user_id
+    latitude = event.message.latitude
+    longitude = event.message.longitude
+    
+    try:
+        # 取得使用者選擇的店家
+        brand = user_states[user_id].get('brand')
+        if not brand:
+            response = "請先幫我選擇飲料店～🧋\n（五十嵐、清心福全、麻古茶坊）"
+        else:
+            # 搜尋附近的店家
+            stores = store_service.search_nearby_stores(brand, (latitude, longitude))
+            if not stores:
+                response = "找不到附近的店家，請重新選擇位置"
+            else:
+                # 更新使用者狀態
+                user_states[user_id]['stores'] = stores
+                user_states[user_id]['state'] = 'waiting_for_store_selection'
+                
+                # 生成店家列表訊息
+                response = "以下是我找到的店家👉🏻\n請選擇一間😊\n\n"
+                for i, store in enumerate(stores, 1):
+                    response += f"{i}. {store['name']}\n"
+                    response += f"   評分：{store['rating']}\n"
+                    response += f"   距離：{store['distance']} 公尺\n\n"
+                response += "請輸入有效的店家編號（1-3）"
+    except Exception as e:
+        response = f"處理位置資訊時發生錯誤：{str(e)}"
+    
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=response)
     )
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    user_id = event.source.user_id
+    data = event.postback.data
+    
+    if data == 'action=location':
+        # 回傳位置按鈕
+        line_bot_api.reply_message(
+            event.reply_token,
+            LocationSendMessage(
+                title='選擇位置',
+                address='請選擇您的位置'
+            )
+        )
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8080) 
