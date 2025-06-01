@@ -4,12 +4,20 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
     LocationMessage, LocationSendMessage, PostbackEvent,
-    ImagemapSendMessage, BaseSize, URIImagemapAction, ImagemapArea
+    ImagemapSendMessage, BaseSize, URIImagemapAction, ImagemapArea,
+    ImageSendMessage
 )
 import os
 import sys
 from dotenv import load_dotenv
 from collections import defaultdict
+import matplotlib
+matplotlib.use('Agg')  # 設定使用非互動式後端
+import matplotlib.pyplot as plt
+import pandas as pd
+from datetime import datetime, timedelta
+import seaborn as sns
+import numpy as np
 
 # 添加專案根目錄到 Python 路徑
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -21,7 +29,7 @@ from app.services.store_service import StoreService
 # 載入環境變數
 load_dotenv()
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../../static')
 
 # LINE Bot 設定
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
@@ -185,6 +193,60 @@ def handle_drink_selection(user_id: str, drink_name: str):
     except Exception as e:
         return f"處理飲料選擇時發生錯誤：{str(e)}"
 
+def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
+    """
+    生成統計圖表
+    """
+    try:
+        # 讀取訂單資料
+        orders = store_service.get_order_history(user_id, start_date, end_date)
+        if not orders:
+            return None
+        
+        # 轉換為 DataFrame
+        df = pd.DataFrame(orders)
+        df['created_at'] = pd.to_datetime(df['created_at'])
+        
+        # 創建圖表
+        plt.style.use('default')  # 使用預設樣式
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # 1. 品牌圓餅圖
+        brand_counts = df['brand'].value_counts()
+        colors = ['#FF9999', '#66B2FF', '#99FF99']  # 設定顏色
+        ax1.pie(brand_counts.values, labels=brand_counts.index, autopct='%1.1f%%', colors=colors)
+        ax1.set_title('飲料品牌分布', pad=20, fontsize=12)
+        
+        # 2. 每日飲料數量長條圖
+        # 將日期轉換為 YYYY/MM/DD 格式
+        df['date'] = df['created_at'].dt.strftime('%Y/%m/%d')
+        daily_counts = df.groupby('date').size()
+        
+        ax2.bar(daily_counts.index, daily_counts.values, color='#66B2FF')
+        ax2.set_title('每日飲料數量', pad=20, fontsize=12)
+        ax2.set_xlabel('日期', fontsize=10)
+        ax2.set_ylabel('數量', fontsize=10)
+        plt.xticks(rotation=45)
+        
+        # 設定中文字型
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        # 調整布局
+        plt.tight_layout()
+        
+        # 儲存圖表
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'static')
+        os.makedirs(static_dir, exist_ok=True)
+        plot_path = os.path.join(static_dir, 'statistics.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        return plot_path
+    except Exception as e:
+        print(f"生成統計圖表時發生錯誤：{str(e)}")
+        return None
+
 def handle_history_query(user_id: str, text: str):
     """
     處理歷史紀錄查詢的邏輯
@@ -195,7 +257,6 @@ def handle_history_query(user_id: str, text: str):
         if state == 'waiting_for_start_date':
             # 檢查日期格式是否正確
             try:
-                from datetime import datetime
                 start_date = datetime.strptime(text, '%Y/%m/%d').strftime('%Y-%m-%d')
                 user_states[user_id]['start_date'] = start_date
                 user_states[user_id]['history_state'] = 'waiting_for_end_date'
@@ -205,7 +266,6 @@ def handle_history_query(user_id: str, text: str):
         
         elif state == 'waiting_for_end_date':
             try:
-                from datetime import datetime
                 end_date = datetime.strptime(text, '%Y/%m/%d').strftime('%Y-%m-%d')
                 start_date = user_states[user_id].get('start_date')
                 
@@ -225,12 +285,43 @@ def handle_history_query(user_id: str, text: str):
                     message += f"   熱量：{order['calories']} 卡路里\n"
                     message += f"   時間：{order['created_at']}\n\n"
                 
-                # 清除使用者狀態
-                user_states[user_id].clear()
+                # 更新狀態為等待使用者決定是否查看統計資料
+                user_states[user_id]['history_state'] = 'waiting_for_statistics_decision'
+                user_states[user_id]['start_date'] = start_date
+                user_states[user_id]['end_date'] = end_date
                 
-                return message
+                return message + "\n想要查看統計資料嗎😁我能幫你畫出圖表喔～\n\n👉🏻請回答「要」或「不要」"
             except ValueError:
                 return "日期格式錯誤，請使用 YYYY/MM/DD 格式（例如：2024/04/30）"
+        
+        elif state == 'waiting_for_statistics_decision':
+            if text == "要":
+                # 生成統計圖表
+                plot_path = generate_statistics_plots(
+                    user_id,
+                    user_states[user_id]['start_date'],
+                    user_states[user_id]['end_date']
+                )
+                
+                if plot_path:
+                    # 清除使用者狀態
+                    user_states[user_id].clear()
+                    
+                    # 回傳圖表
+                    return ImageSendMessage(
+                        original_content_url=f"https://{request.host}/static/statistics.png",
+                        preview_image_url=f"https://{request.host}/static/statistics.png"
+                    )
+                else:
+                    user_states[user_id].clear()
+                    return "生成統計圖表時發生錯誤，請稍後再試。"
+            
+            elif text == "不要":
+                user_states[user_id].clear()
+                return "謝謝您的使用！如果之後需要查看統計資料，隨時都可以查詢歷史紀錄。"
+            
+            else:
+                return "請回答「要」或「不要」"
         
         else:
             # 初始化查詢狀態
@@ -264,10 +355,16 @@ def handle_message(event):
     if history_state:
         # 處理歷史紀錄查詢
         response = handle_history_query(user_id, text)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=response)
-        )
+        if isinstance(response, ImageSendMessage):
+            line_bot_api.reply_message(
+                event.reply_token,
+                response
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=response)
+            )
     elif state == 'waiting_for_store_selection':
         # 處理店家編號選擇
         response = handle_store_number(user_id, text)
@@ -291,7 +388,7 @@ def handle_message(event):
         elif text == "AI 飲料推薦":
             response = "💬請告訴我你想要什麼樣的飲料，例如：\n- 想要低熱量的飲料\n- 想要茶類的飲料\n- 想要有珍珠的飲料"
         elif text == "點餐資料儲存":
-            response = "請先幫我選擇飲料店～🧋"
+            response = "請先幫我選擇飲料店～🧋\n（五十嵐、清心福全、麻古茶坊）"
         elif text == "歷史紀錄查詢":
             response = "請輸入開始日期（格式：YYYY/MM/DD）"
             user_states[user_id]['history_state'] = 'waiting_for_start_date'
@@ -315,7 +412,6 @@ def handle_message(event):
                     )
                 ]
             )
-
         elif "比較" in text:
             response = handle_drink_comparison(text)
         elif text.startswith("想要") or text.startswith("我想"):
@@ -327,10 +423,10 @@ def handle_message(event):
             response = handle_store_selection(user_id, text)
         
         # 回傳訊息
-        if isinstance(response, ImagemapSendMessage):
+        if isinstance(response, (ImagemapSendMessage, ImageSendMessage)):
             line_bot_api.reply_message(
                 event.reply_token,
-                response  # 不包在 TextSendMessage 裡
+                response
             )
         else:
             line_bot_api.reply_message(
