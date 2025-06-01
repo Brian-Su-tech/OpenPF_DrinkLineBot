@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Optional
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
+import json
 
 # 載入環境變數
 load_dotenv()
@@ -35,9 +36,18 @@ class StoreService:
         # 初始化 Google Sheets API
         scope = ['https://spreadsheets.google.com/feeds',
                 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            os.getenv('GOOGLE_SHEETS_CREDENTIALS_FILE'), scope)
-        self.gc = gspread.authorize(creds)
+        
+        # 從環境變數讀取認證資訊
+        credentials_json = os.getenv('GOOGLE_SHEETS_CREDENTIALS')
+        if not credentials_json:
+            raise ValueError("未設定 GOOGLE_SHEETS_CREDENTIALS 環境變數")
+        
+        try:
+            credentials_dict = json.loads(credentials_json)
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
+            self.gc = gspread.authorize(creds)
+        except Exception as e:
+            raise ValueError(f"Google Sheets 認證失敗：{str(e)}")
         
         # 載入飲料資料
         current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
