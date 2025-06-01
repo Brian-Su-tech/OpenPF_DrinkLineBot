@@ -44,9 +44,11 @@ class StoreService:
         
         try:
             credentials_dict = json.loads(credentials_json)
+            print("JSON 格式正確")
             creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_dict, scope)
             self.gc = gspread.authorize(creds)
         except Exception as e:
+            print(f"JSON 格式錯誤：{str(e)}")
             raise ValueError(f"Google Sheets 認證失敗：{str(e)}")
         
         # 載入飲料資料
