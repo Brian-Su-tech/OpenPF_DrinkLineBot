@@ -208,7 +208,7 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         df['created_at'] = pd.to_datetime(df['created_at'])
         
         # 設定中文字型
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft YaHei', 'SimHei', 'sans-serif']
+        plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Microsoft YaHei', 'SimHei', 'sans-serif']
         plt.rcParams['axes.unicode_minus'] = False
         
         # 創建圖表
