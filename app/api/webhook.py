@@ -207,6 +207,10 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         df = pd.DataFrame(orders)
         df['created_at'] = pd.to_datetime(df['created_at'])
         
+        # 設定中文字型
+        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'Microsoft YaHei', 'SimHei', 'sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False
+        
         # 創建圖表
         plt.style.use('default')  # 使用預設樣式
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -227,10 +231,6 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         ax2.set_xlabel('日期', fontsize=10)
         ax2.set_ylabel('數量', fontsize=10)
         plt.xticks(rotation=45)
-        
-        # 設定中文字型
-        plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']
-        plt.rcParams['axes.unicode_minus'] = False
         
         # 調整布局
         plt.tight_layout()
