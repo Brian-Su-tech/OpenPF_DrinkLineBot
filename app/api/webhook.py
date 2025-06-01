@@ -207,9 +207,15 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         df = pd.DataFrame(orders)
         df['created_at'] = pd.to_datetime(df['created_at'])
         
-        # 設定中文字型
-        plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Microsoft YaHei', 'SimHei', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False
+        # 品牌名稱對應
+        brand_mapping = {
+            '五十嵐': 'FIFTYLAN',
+            '清心福全': 'QING XIN FU QUAN',
+            '麻古茶坊': 'MACU TEA'
+        }
+        
+        # 轉換品牌名稱為英文
+        df['brand'] = df['brand'].map(brand_mapping)
         
         # 創建圖表
         plt.style.use('default')  # 使用預設樣式
@@ -219,7 +225,7 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         brand_counts = df['brand'].value_counts()
         colors = ['#FF9999', '#66B2FF', '#99FF99']  # 設定顏色
         ax1.pie(brand_counts.values, labels=brand_counts.index, autopct='%1.1f%%', colors=colors)
-        ax1.set_title('飲料品牌分布', pad=20, fontsize=12)
+        ax1.set_title('Drink Brand Distribution', pad=20, fontsize=12)
         
         # 2. 每日飲料數量長條圖
         # 將日期轉換為 YYYY/MM/DD 格式
@@ -227,9 +233,9 @@ def generate_statistics_plots(user_id: str, start_date: str, end_date: str):
         daily_counts = df.groupby('date').size()
         
         ax2.bar(daily_counts.index, daily_counts.values, color='#66B2FF')
-        ax2.set_title('每日飲料數量', pad=20, fontsize=12)
-        ax2.set_xlabel('日期', fontsize=10)
-        ax2.set_ylabel('數量', fontsize=10)
+        ax2.set_title('Daily Drink Count', pad=20, fontsize=12)
+        ax2.set_xlabel('Date', fontsize=10)
+        ax2.set_ylabel('Count', fontsize=10)
         plt.xticks(rotation=45)
         
         # 調整布局
